@@ -1,7 +1,17 @@
 // electron/main.ts
 import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron';
 import * as path from 'path';
-const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_IS_DEV === 'true';
+
+// Enhanced development detection
+const isDev = process.env.NODE_ENV === 'development' || 
+              process.env.ELECTRON_IS_DEV === 'true' ||
+              !app.isPackaged;
+
+console.log('Development mode:', isDev);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('ELECTRON_IS_DEV:', process.env.ELECTRON_IS_DEV);
+console.log('app.isPackaged:', app.isPackaged);
+
 const Store = require('electron-store');
 
 // Configuration store for API keys and settings
@@ -43,18 +53,29 @@ function createWindow(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js') // Fixed path
+      preload: path.join(__dirname, 'preload.js')
     },
-    icon: path.join(__dirname, 'assets', 'icon.png'), // Fixed path
+    // Temporarily comment out icon to avoid path issues
+    // icon: path.join(__dirname, 'assets', 'icon.png'),
     title: 'Slovenian Football Hub',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    show: false // Don't show until ready
+    show: false
   });
 
-  // Load the app
-  const startUrl = isDev 
-    ? 'http://localhost:3000' 
-    : `file://${path.join(__dirname, '..', 'build', 'index.html')}`; // Fixed path
+  // Fixed URL loading logic
+  let startUrl: string;
+  
+  if (isDev) {
+    // In development, always connect to React dev server
+    startUrl = 'http://localhost:3000';
+    console.log('Development mode: Loading from React dev server');
+  } else {
+    // In production, load from built files
+    startUrl = `file://${path.join(__dirname, '..', 'build', 'index.html')}`;
+    console.log('Production mode: Loading from built files');
+  }
+  
+  console.log('Loading URL:', startUrl);
   
   mainWindow.loadURL(startUrl);
 
@@ -62,10 +83,31 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     
-    // Focus window on creation
     if (isDev) {
+      // Force open DevTools in development
       mainWindow.webContents.openDevTools();
+      console.log('DevTools should be opening...');
     }
+  });
+
+  // Enhanced error handling for URL loading
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error('Failed to load URL:', validatedURL);
+    console.error('Error code:', errorCode);
+    console.error('Error description:', errorDescription);
+    
+    if (isDev) {
+      // If dev server isn't ready, retry after a delay
+      console.log('Retrying connection to React dev server in 2 seconds...');
+      setTimeout(() => {
+        mainWindow.loadURL('http://localhost:3000');
+      }, 2000);
+    }
+  });
+
+  // Log when page finishes loading
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('Page loaded successfully!');
   });
 
   // Save window bounds on close
@@ -176,118 +218,204 @@ function createMenu(): void {
 }
 
 async function showSettingsDialog(): Promise<void> {
-  const settingsWindow = new BrowserWindow({
+  // Get current config
+  const currentConfig = store.store;
+
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: 'API Configuration',
+    message: 'Configure your RapidAPI keys for football data',
+    detail: `Current status:
+- Football API Key: ${currentConfig.footballApiKey ? '✓ Set' : '✗ Not set'}
+- News API Key: ${currentConfig.newsApiKey ? '✓ Set' : '✗ Not set'}
+
+Choose an option:`,
+    buttons: ['Set Football API Key', 'Set News API Key', 'View Current Keys', 'Cancel'],
+    defaultId: 0,
+    cancelId: 3
+  });
+
+  if (result.response === 3) return; // Cancel
+  if (result.response === 2) {
+    // View current keys
+    showCurrentKeys();
+    return;
+  }
+
+  const keyType = result.response === 0 ? 'footballApiKey' : 'newsApiKey';
+  const keyName = result.response === 0 ? 'Football API Key' : 'News API Key';
+  
+  // Create a simple input dialog
+  const inputWindow = new BrowserWindow({
     width: 500,
-    height: 400,
+    height: 350,
     parent: mainWindow,
     modal: true,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js') // Fixed path
+      nodeIntegration: true,
+      contextIsolation: false
     },
-    title: 'Settings',
+    title: `Enter ${keyName}`,
     resizable: false,
     minimizable: false,
-    maximizable: false
+    maximizable: false,
+    show: false
   });
 
-  const settingsHtml = `
+  const inputHtml = `
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Settings</title>
+  <title>Enter ${keyName}</title>
   <style>
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      padding: 20px;
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 30px;
       margin: 0;
       background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
     }
     h2 {
       margin-top: 0;
       color: #333;
+      text-align: center;
     }
-    .form-group {
+    .info {
+      background: #e1f5fe;
+      padding: 15px;
+      border-radius: 6px;
       margin-bottom: 20px;
+      font-size: 14px;
+      line-height: 1.4;
     }
-    label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: 500;
-      color: #555;
-    }
-    input[type="password"] {
+    input {
       width: 100%;
-      padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
+      padding: 12px;
+      border: 2px solid #ddd;
+      border-radius: 6px;
       font-size: 14px;
       box-sizing: border-box;
+      margin-bottom: 20px;
+    }
+    input:focus {
+      outline: none;
+      border-color: #8b5cf6;
+    }
+    .buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
     }
     button {
-      background: #8b5cf6;
-      color: white;
-      border: none;
       padding: 10px 20px;
-      border-radius: 4px;
+      border: none;
+      border-radius: 6px;
       cursor: pointer;
       font-size: 14px;
-      margin-right: 10px;
     }
-    button:hover {
+    .save-btn {
+      background: #8b5cf6;
+      color: white;
+    }
+    .save-btn:hover {
       background: #7c3aed;
     }
-    .button-secondary {
+    .cancel-btn {
       background: #6b7280;
+      color: white;
     }
-    .button-secondary:hover {
+    .cancel-btn:hover {
       background: #4b5563;
     }
-    .help-text {
-      font-size: 11px;
+    .current-value {
+      font-size: 12px;
       color: #666;
-      margin-top: 3px;
+      margin-bottom: 10px;
+    }
+    .toggle-btn {
+      background: transparent;
+      border: 1px solid #ddd;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 10px;
     }
   </style>
 </head>
 <body>
-  <h2>API Configuration</h2>
-  <p style="color: #666; font-size: 14px;">Enter your RapidAPI keys to access live football data:</p>
-  
-  <form id="settings-form">
-    <div class="form-group">
-      <label for="football-api-key">API-Football Key (RapidAPI):</label>
-      <input type="password" id="football-api-key" placeholder="Enter your API-Football key">
-      <div class="help-text">For fixtures, standings, player stats, transfers</div>
+  <div class="container">
+    <h2>🔑 ${keyName}</h2>
+    
+    <div class="info">
+      <strong>How to get this key:</strong><br>
+      1. Go to <strong>rapidapi.com</strong><br>
+      2. Search for "${result.response === 0 ? 'API-Football' : 'Football API News'}"<br>
+      3. Subscribe (free tier available)<br>
+      4. Copy your API key and paste it below
     </div>
     
-    <div class="form-group">
-      <label for="news-api-key">Football API News Key (RapidAPI):</label>
-      <input type="password" id="news-api-key" placeholder="Enter your Football API News key">
-      <div class="help-text">For current football news and updates</div>
+    ${currentConfig[keyType] ? `<div class="current-value">Current: ${currentConfig[keyType].substring(0, 8)}...</div>` : ''}
+    
+    <div style="display: flex; align-items: center;">
+      <input type="password" id="apiKey" placeholder="Enter your ${keyName}" value="${currentConfig[keyType] || ''}" autofocus>
+      <button class="toggle-btn" onclick="togglePassword()">Show</button>
     </div>
     
-    <div class="form-group">
-      <button type="submit">Save Settings</button>
-      <button type="button" class="button-secondary" onclick="window.close()">Cancel</button>
+    <div class="buttons">
+      <button class="cancel-btn" onclick="window.close()">Cancel</button>
+      <button class="save-btn" onclick="saveKey()">Save Key</button>
     </div>
-  </form>
+  </div>
   
   <script>
-    document.getElementById('settings-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const footballApiKey = document.getElementById('football-api-key').value;
-      const newsApiKey = document.getElementById('news-api-key').value;
+    const { ipcRenderer } = require('electron');
+    
+    function togglePassword() {
+      const input = document.getElementById('apiKey');
+      const btn = document.querySelector('.toggle-btn');
+      if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = 'Hide';
+      } else {
+        input.type = 'password';
+        btn.textContent = 'Show';
+      }
+    }
+    
+    function saveKey() {
+      const apiKey = document.getElementById('apiKey').value.trim();
       
-      try {
-        await window.electronAPI.saveConfig({
-          footballApiKey,
-          newsApiKey
-        });
+      if (!apiKey) {
+        alert('Please enter an API key');
+        return;
+      }
+      
+      // Send the key to main process
+      ipcRenderer.send('save-api-key', {
+        keyType: '${keyType}',
+        keyValue: apiKey
+      });
+      
+      window.close();
+    }
+    
+    // Handle Enter key
+    document.getElementById('apiKey').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        saveKey();
+      }
+    });
+    
+    // Handle Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
         window.close();
-      } catch (error) {
-        console.error('Error saving settings:', error);
       }
     });
   </script>
@@ -295,33 +423,126 @@ async function showSettingsDialog(): Promise<void> {
 </html>
 `;
 
-  settingsWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(settingsHtml)}`);
+  inputWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(inputHtml)}`);
+  
+  inputWindow.once('ready-to-show', () => {
+    inputWindow.show();
+  });
 }
 
-// IPC handlers
+function showCurrentKeys(): void {
+  const currentConfig = store.store;
+  
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Current API Keys',
+    message: 'API Keys Status',
+    detail: `Football API Key: ${currentConfig.footballApiKey ? 
+      `Set (${currentConfig.footballApiKey.substring(0, 8)}...)` : 'Not set'}
+
+News API Key: ${currentConfig.newsApiKey ? 
+      `Set (${currentConfig.newsApiKey.substring(0, 8)}...)` : 'Not set'}
+
+To update a key, use File > Settings and select the key you want to change.`,
+    buttons: ['OK']
+  });
+}
+
+// IPC Handlers
 ipcMain.handle('get-config', () => {
-  return store.store;
+  try {
+    const config = store.store;
+    console.log('get-config called, returning config');
+    return config;
+  } catch (error) {
+    console.error('Error getting config:', error);
+    return {};
+  }
 });
 
 ipcMain.handle('save-config', (event, config: Partial<AppConfig>) => {
-  // Update store with new config
-  Object.keys(config).forEach(key => {
-    store.set(key as keyof AppConfig, (config as any)[key]);
-  });
-  
-  // Notify renderer of config change
-  mainWindow.webContents.send('config-updated', store.store);
-  
-  return true;
+  try {
+    console.log('save-config called via handle');
+    
+    if (!config || typeof config !== 'object') {
+      console.error('Invalid config object received:', config);
+      return false;
+    }
+    
+    // Update store with new config
+    Object.keys(config).forEach(key => {
+      if (config[key as keyof AppConfig] !== undefined && config[key as keyof AppConfig] !== '') {
+        store.set(key as keyof AppConfig, config[key as keyof AppConfig]);
+      }
+    });
+    
+    console.log('Config saved successfully via handle');
+    
+    // Notify renderer of config change
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('config-updated', store.store);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error in save-config handler:', error);
+    return false;
+  }
+});
+
+// Simple API key saving (for the new settings dialog)
+ipcMain.on('save-api-key', (event, data) => {
+  try {
+    console.log('Saving API key:', data.keyType);
+    
+    if (!data.keyType || !data.keyValue) {
+      console.error('Invalid key data received');
+      dialog.showErrorBox('Error', 'Invalid key data received');
+      return;
+    }
+    
+    // Save the key
+    store.set(data.keyType, data.keyValue);
+    
+    console.log('API key saved successfully');
+    
+    // Show success message
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Success',
+      message: 'API Key Saved',
+      detail: `Your ${data.keyType === 'footballApiKey' ? 'Football API' : 'News API'} key has been saved successfully.`,
+      buttons: ['OK']
+    });
+    
+    // Notify main window if needed
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('config-updated', store.store);
+    }
+    
+  } catch (error) {
+    console.error('Error saving API key:', error);
+    
+    dialog.showErrorBox('Error', 'Failed to save API key. Please try again.');
+  }
 });
 
 ipcMain.handle('show-message-box', async (event, options) => {
-  const result = await dialog.showMessageBox(mainWindow, options);
-  return result;
+  try {
+    const result = await dialog.showMessageBox(mainWindow, options);
+    return result;
+  } catch (error) {
+    console.error('Error showing message box:', error);
+    return { response: 0 };
+  }
 });
 
 ipcMain.handle('show-error-dialog', async (event, title: string, content: string) => {
-  await dialog.showErrorBox(title, content);
+  try {
+    await dialog.showErrorBox(title, content);
+  } catch (error) {
+    console.error('Error showing error dialog:', error);
+  }
 });
 
 // App event handlers
@@ -329,7 +550,6 @@ app.whenReady().then(() => {
   createWindow();
 
   app.on('activate', () => {
-    // On macOS, re-create window when dock icon is clicked
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
@@ -337,7 +557,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // On macOS, keep app running even when all windows are closed
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -352,12 +571,10 @@ app.on('web-contents-created', (event, contents) => {
   contents.on('will-navigate', (event, navigationUrl) => {
     const parsedUrl = new URL(navigationUrl);
     
-    // Allow navigation only to localhost in development
     if (isDev && parsedUrl.origin === 'http://localhost:3000') {
       return;
     }
     
-    // Prevent navigation to external URLs
     event.preventDefault();
   });
 });
@@ -365,19 +582,11 @@ app.on('web-contents-created', (event, contents) => {
 // Handle certificate errors
 app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
   if (isDev) {
-    // In development, ignore certificate errors
     event.preventDefault();
     callback(true);
   } else {
-    // In production, use default behavior
     callback(false);
   }
 });
-
-// Auto-updater (placeholder for future implementation)
-if (!isDev) {
-  // Here you would integrate with electron-updater
-  // autoUpdater.checkForUpdatesAndNotify();
-}
 
 export { mainWindow };

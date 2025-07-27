@@ -326,11 +326,12 @@ class APIClient {
   private startCacheCleanup(): void {
     setInterval(() => {
       const now = Date.now();
-      for (const [key, entry] of this.cache.entries()) {
+      // Use forEach instead of for...of to avoid TypeScript iterator issues
+      this.cache.forEach((entry, key) => {
         if (now > entry.timestamp + entry.ttl) {
           this.cache.delete(key);
         }
-      }
+      });
     }, 5 * 60 * 1000); // Clean every 5 minutes
   }
 
@@ -524,7 +525,11 @@ class APIClient {
 
   // Rate limit info
   getRateLimitInfo(): Record<string, number> {
-    return Object.fromEntries(this.requestCounts);
+    const result: Record<string, number> = {};
+    this.requestCounts.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
   }
 
   // Clear cache method
