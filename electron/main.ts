@@ -53,7 +53,10 @@ function createWindow(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'), // Fixed: removed '../'
+      // Add additional security options
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false
     },
     // Temporarily comment out icon to avoid path issues
     // icon: path.join(__dirname, 'assets', 'icon.png'),
@@ -76,6 +79,7 @@ function createWindow(): void {
   }
   
   console.log('Loading URL:', startUrl);
+  console.log('Preload script path:', path.join(__dirname, 'preload.js'));
   
   mainWindow.loadURL(startUrl);
 
@@ -108,6 +112,16 @@ function createWindow(): void {
   // Log when page finishes loading
   mainWindow.webContents.on('did-finish-load', () => {
     console.log('Page loaded successfully!');
+    
+    // Test if preload script worked
+    mainWindow.webContents.executeJavaScript(`
+      console.log('Testing electronAPI availability:', !!window.electronAPI);
+      if (window.electronAPI) {
+        console.log('electronAPI methods:', Object.keys(window.electronAPI));
+      } else {
+        console.error('electronAPI not available - preload script failed');
+      }
+    `);
   });
 
   // Save window bounds on close
@@ -481,6 +495,7 @@ ipcMain.handle('save-config', (event, config: Partial<AppConfig>) => {
     // Notify renderer of config change
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('config-updated', store.store);
+      console.log('Config update notification sent to main window');
     }
     
     return true;
@@ -515,9 +530,11 @@ ipcMain.on('save-api-key', (event, data) => {
       buttons: ['OK']
     });
     
-    // Notify main window if needed
+    // Notify main window of config change
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('config-updated', store.store);
+      const updatedConfig = store.store;
+      mainWindow.webContents.send('config-updated', updatedConfig);
+      console.log('Config update notification sent to main window after API key save');
     }
     
   } catch (error) {
@@ -525,6 +542,16 @@ ipcMain.on('save-api-key', (event, data) => {
     
     dialog.showErrorBox('Error', 'Failed to save API key. Please try again.');
   }
+});
+
+// Test connection handler
+ipcMain.handle('test-connection', () => {
+  console.log('test-connection called - IPC is working!');
+  return { 
+    success: true, 
+    timestamp: Date.now(),
+    message: 'IPC connection successful'
+  };
 });
 
 ipcMain.handle('show-message-box', async (event, options) => {
